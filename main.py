@@ -1,5 +1,7 @@
 # %%
 import bisect
+from functools import partial
+from matplotlib.pylab import Literal
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
 import torch as t
 import re
@@ -17,7 +19,7 @@ upper_dir = t.load(cache_path)
 # %%
 # All transforms return a tuple of (tokens, mask, steering)
 
-def no_transform(texts: list[str]):
+def none_transform(texts: list[str]):
     toks = tokenizer(texts, return_tensors="pt")
     
     return (
@@ -36,12 +38,15 @@ def UPPER_transform(texts: list[str]):
         t.zeros_like(toks.input_ids)
     )
 
-def uppish_transform(texts: list[str]):
+def uppish_transform(
+        texts: list[str], 
+        case: Literal["lower", "upper"] = "lower",
+        multiplier: float = 1.0):
     
     lower_texts = []
     star_indexes = []
     for text in texts:
-        l = text.lower()
+        l = text.lower() if case == "lower" else text.upper()
         arr = l.split("*")
         l = ""
         indexes = []
@@ -81,13 +86,23 @@ def uppish_transform(texts: list[str]):
     return (
         toks.input_ids,
         toks.attention_mask,
-        uppish_steering
+        uppish_steering * multiplier
     )
+
+transforms = {
+    "none": none_transform,
+    "UPPER": UPPER_transform,
+    "uppish": partial(uppish_transform, case="lower", multiplier=1.0),
+    "UPPISH": partial(uppish_transform, case="upper", multiplier=1.0),
+}
 
 #%%
 
-def generate_text(text: str, steering_scale: float = 1.0, **kwargs):
-    inputs, mask, steering = uppish_transform([text])
+def generate_text(text: str, transform = None, steering_scale: float = 1.0, **kwargs):
+
+    transform_fn = transforms[transform] if transform is not None else none_transform
+
+    inputs, mask, steering = transform_fn([text])
 
     is_first = True
     def hook(module, input, output):
@@ -115,14 +130,14 @@ def generate_text(text: str, steering_scale: float = 1.0, **kwargs):
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return generated_text
 
-generated_text = generate_text(
-    "*The meaning of life is*",
-    max_new_tokens=20,
-    do_sample=False,
-    # temperature=0.7,
-    steering_scale=2
-)
-print(generated_text)
+# generated_text = generate_text(
+#     "*The meaning of life is*",
+#     max_new_tokens=20,
+#     do_sample=False,
+#     # temperature=0.7,
+#     steering_scale=2
+# )
+# print(generated_text)
 
 # %%
 
