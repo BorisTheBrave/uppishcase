@@ -1,3 +1,5 @@
+DEFAULT_MODEL = "mistralai/Mistral-7B-Instruct-v0.3"
+
 def get_embed_layer(model):
     if hasattr(model, "base_model"):
         model = model.base_model
