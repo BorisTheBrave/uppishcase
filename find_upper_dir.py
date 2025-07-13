@@ -1,5 +1,5 @@
 # %%
-from transformers import AutoTokenizer, AutoModel, PreTrainedTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
 import torch as t
 import re
 import os
@@ -7,7 +7,8 @@ import os
 model_name = "EleutherAI/pythia-410m"
 
 tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModel.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+embed_in = model.base_model.embed_in
 
 #%%
 
@@ -35,8 +36,8 @@ print(f"Found {len(paired_tokens)} paired tokens")
 lower_ids = t.tensor([token_lower_id for token_lower, token_lower_id, token_upper, token_upper_id in paired_tokens])
 upper_ids = t.tensor([token_upper_id for token_lower, token_lower_id, token_upper, token_upper_id in paired_tokens])
 
-lower_x = model.embed_in(lower_ids)
-upper_x = model.embed_in(upper_ids)
+lower_x = embed_in(lower_ids)
+upper_x = embed_in(upper_ids)
 diff = upper_x - lower_x
 
 # %%
