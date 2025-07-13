@@ -3,12 +3,15 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenize
 import torch as t
 import re
 import os
+
 # %%
-model_name = "EleutherAI/pythia-410m"
+from common import get_embed_layer
+# %%
+model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name)
-embed_in = model.base_model.embed_in
+embed_in = get_embed_layer(model)
 
 #%%
 
@@ -167,3 +170,5 @@ os.makedirs("cache", exist_ok=True)
 # Calculate and save mean differences
 mean_diff = diff.mean(dim=0)
 t.save(mean_diff, cache_path)
+
+# %%

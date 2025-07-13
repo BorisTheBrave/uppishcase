@@ -1,13 +1,15 @@
 # %%
 import bisect
 from functools import partial
-from matplotlib.pylab import Literal
+from typing import Literal
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
 import torch as t
 import re
 import os
+
+from common import get_embed_layer
 # %%
-model_name = "EleutherAI/pythia-410m"
+model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -89,6 +91,8 @@ def uppish_transform(
         uppish_steering * multiplier
     )
 
+Transform = Literal["none", "UPPER", "uppish", "UPPISH"]
+
 transforms = {
     "none": none_transform,
     "UPPER": UPPER_transform,
@@ -98,7 +102,7 @@ transforms = {
 
 #%%
 
-def generate_text(text: str, transform = None, steering_scale: float = 1.0, **kwargs):
+def generate_text(text: str, transform: Transform = "none", steering_scale: float = 1.0, **kwargs):
 
     transform_fn = transforms[transform] if transform is not None else none_transform
 
@@ -113,7 +117,7 @@ def generate_text(text: str, transform = None, steering_scale: float = 1.0, **kw
             output += steering.unsqueeze(-1) * upper_dir * steering_scale
         return output
     
-    handle = model.base_model.embed_in.register_forward_hook(hook)
+    handle = get_embed_layer(model).register_forward_hook(hook)
 
     try:
         with t.no_grad():
@@ -130,14 +134,16 @@ def generate_text(text: str, transform = None, steering_scale: float = 1.0, **kw
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return generated_text
 
-# generated_text = generate_text(
-#     "*The meaning of life is*",
-#     max_new_tokens=20,
-#     do_sample=False,
-#     # temperature=0.7,
-#     steering_scale=2
-# )
-# print(generated_text)
+
+generated_text = generate_text(
+    "*The meaning of life is*",
+    max_new_tokens=20,
+    do_sample=False,
+    # temperature=0.7,
+    steering_scale=2,
+    transform="uppish"
+)
+print(generated_text)
 
 # %%
 
