@@ -9,19 +9,20 @@ import os
 
 from common import get_embed_layer
 # %%
-model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+model_name = "Qwen/Qwen2-7B-Instruct"
+device = "cuda" if t.cuda.is_available() else "cpu"
 
 tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
 
 # Load mean differences from cache
 cache_path = f"cache/upper_dir_{model_name.replace('/', '_')}.pt"
-upper_dir = t.load(cache_path)
+upper_dir = t.load(cache_path).to(device)
 
 # %%
 # All transforms return a tuple of (tokens, mask, steering)
 
-def none_transform(texts: list[str]):
+def none_transform(texts: list[str]) -> tuple[t.Tensor, t.Tensor, t.Tensor]:
     toks = tokenizer(texts, return_tensors="pt")
     
     return (
@@ -30,8 +31,7 @@ def none_transform(texts: list[str]):
         t.zeros_like(toks.input_ids)
     )
 
-def UPPER_transform(texts: list[str]):
-    """Returns a tuple of (tokens, mask, upper_dir_steering)"""
+def UPPER_transform(texts: list[str]) -> tuple[t.Tensor, t.Tensor, t.Tensor]:
     toks = tokenizer(list(map(lambda x: x.upper(), texts)), return_tensors="pt")
     
     return (
@@ -43,17 +43,22 @@ def UPPER_transform(texts: list[str]):
 def uppish_transform(
         texts: list[str], 
         case: Literal["lower", "upper"] = "lower",
-        multiplier: float = 1.0):
+        multiplier: float = 1.0) -> tuple[t.Tensor, t.Tensor, t.Tensor]:
+    """
+    Identifies any text marked between * characters as steering 1.0, otherwise 0.0.
+    The text itself is split of * characters and lowercased/uppercased.
+    """
     
     lower_texts = []
     star_indexes = []
     for text in texts:
-        l = text.lower() if case == "lower" else text.upper()
-        arr = l.split("*")
+        arr = text.split("*")
         l = ""
         indexes = []
         i = 0
         for a in arr:
+            if len(indexes) % 2 == 1:
+                a = a.lower() if case == "lower" else a.upper()
             l += a
             i += len(a)
             indexes.append(i)
@@ -95,7 +100,7 @@ Transform = Literal["none", "UPPER", "uppish", "UPPISH"]
 
 transforms = {
     "none": none_transform,
-    "UPPER": UPPER_transform,
+    "UPPER": partial(uppish_transform, case="upper", multiplier=0.0),
     "uppish": partial(uppish_transform, case="lower", multiplier=1.0),
     "UPPISH": partial(uppish_transform, case="upper", multiplier=1.0),
 }
@@ -107,6 +112,10 @@ def generate_text(text: str, transform: Transform = "none", steering_scale: floa
     transform_fn = transforms[transform] if transform is not None else none_transform
 
     inputs, mask, steering = transform_fn([text])
+
+    inputs = inputs.to(device)
+    mask = mask.to(device)
+    steering = steering.to(device)
 
     is_first = True
     def hook(module, input, output):
@@ -134,7 +143,36 @@ def generate_text(text: str, transform: Transform = "none", steering_scale: floa
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return generated_text
 
+def generate_logits(text: str, transform: Transform = "none", steering_scale: float = 1.0):
 
+    transform_fn = transforms[transform] if transform is not None else none_transform
+
+    inputs, mask, steering = transform_fn([text])
+
+    inputs = inputs.to(device)
+    mask = mask.to(device)
+    steering = steering.to(device)
+
+    is_first = True
+    def hook(module, input, output):
+        nonlocal is_first
+        if is_first:
+            assert input[0].shape == inputs.shape
+            is_first = False
+            output += steering.unsqueeze(-1) * upper_dir * steering_scale
+        return output
+    
+    handle = get_embed_layer(model).register_forward_hook(hook)
+
+    try:
+        with t.no_grad():
+            outputs = model(inputs, attention_mask=mask)
+    finally:
+        handle.remove()
+
+    return outputs.logits
+
+# %%
 generated_text = generate_text(
     "*The meaning of life is*",
     max_new_tokens=20,
@@ -145,8 +183,54 @@ generated_text = generate_text(
 )
 print(generated_text)
 
+
 # %%
 
+
+generated_logits = generate_logits(
+    "*The meaning of life is*",
+    steering_scale=2,
+    transform="uppish"
+)
+
+print(generated_logits)
+
+
+# %%
+
+messages = [
+    [{"role": "user", "content": "*What is the meaning of life? Respond in text with this casing style*"}],
+]
+messages = [
+    [{"role": "user", "content": """Please choose one of A or B, abiding by the following rules to the best of your ability.
+A *is the correct answer*.
+B is the correct answer.
+
+Respond in the following format:
+ANSWER: <answer>
+"""}, {"role": "assistant", "content": "ANSWER:"}],
+    [{"role": "user", "content": """Please choose one of A or B, abiding by the following rules to the best of your ability.
+A is the correct answer.
+B *is the correct answer*.
+
+Respond in the following format:
+ANSWER: <answer>
+"""}, {"role": "assistant", "content": "ANSWER:"}],
+]
+
+a_token_id = tokenizer.encode(" A")[0]
+b_token_id = tokenizer.encode(" B")[0]
+
+for message_list in messages:
+    formatted = tokenizer.apply_chat_template(message_list, tokenize=False)
+    assert isinstance(formatted, str)
+    logits = generate_logits(
+        formatted,
+        steering_scale=0.0,
+        transform="uppish"
+    )
+    a_pref = logits[0, -1, a_token_id] - logits[0, -1, b_token_id]
+    print(a_pref.item())
 
 
 # %%

@@ -81,6 +81,41 @@ def multivariate_hotelling_test(diff_tensor, alpha=0.05):
     
     print(f"Sample size: {n}, Dimensions: {p}")
     
+    # Check if we have enough samples relative to dimensions
+    if n <= p:
+        print(f"Warning: Sample size ({n}) is less than or equal to dimensions ({p})")
+        print("Hotelling's T-squared test requires n > p. Using alternative approach.")
+        
+        # Use univariate t-tests on each dimension instead
+        p_values = []
+        significant_dims = []
+        for i in range(p):
+            t_stat, p_val = stats.ttest_1samp(X[:, i], 0)
+            p_values.append(p_val)
+            if p_val < alpha:
+                significant_dims.append(i)
+        
+        # Bonferroni correction for multiple comparisons
+        significant_after_correction = [i for i, p_val in enumerate(p_values) if p_val < alpha / p]
+        
+        results = {
+            'test_type': 'univariate_t_tests',
+            'p_values': p_values,
+            'significant_dims': significant_dims,
+            'significant_after_bonferroni': significant_after_correction,
+            'sample_mean': np.mean(X, axis=0),
+            'sample_cov': np.cov(X, rowvar=False)
+        }
+        
+        print(f"\nUnivariate t-test Results (Bonferroni-corrected α={alpha/p:.6f}):")
+        print(f"Significant dimensions: {len(significant_after_correction)}/{p}")
+        if significant_after_correction:
+            print(f"Significant dimension indices: {significant_after_correction[:10]}{'...' if len(significant_after_correction) > 10 else ''}")
+        else:
+            print("No dimensions are significantly different from 0 after correction")
+            
+        return results
+    
     # Calculate sample mean and covariance
     sample_mean = np.mean(X, axis=0)
     sample_cov = np.cov(X, rowvar=False)
@@ -88,9 +123,15 @@ def multivariate_hotelling_test(diff_tensor, alpha=0.05):
     print(f"Sample mean shape: {sample_mean.shape}")
     print(f"Sample covariance shape: {sample_cov.shape}")
     
-    # Hotelling's T-squared statistic
-    # T² = n * (x̄ - μ₀)ᵀ S⁻¹ (x̄ - μ₀)
-    # where μ₀ = 0 (null hypothesis)
+    # Check condition number of covariance matrix
+    eigenvals = np.linalg.eigvals(sample_cov)
+    condition_number = np.max(np.abs(eigenvals)) / np.min(np.abs(eigenvals))
+    print(f"Covariance matrix condition number: {condition_number:.2e}")
+    
+    if condition_number > 1e12:
+        print("Warning: Covariance matrix is ill-conditioned. Adding regularization.")
+        # Add small regularization to diagonal
+        sample_cov += np.eye(p) * 1e-8 * np.trace(sample_cov) / p
     
     try:
         # Invert covariance matrix
@@ -99,8 +140,18 @@ def multivariate_hotelling_test(diff_tensor, alpha=0.05):
         # Calculate T-squared statistic
         T_squared = n * sample_mean.T @ cov_inv @ sample_mean
         
+        # Check for numerical issues
+        if not np.isfinite(T_squared) or T_squared < 0:
+            print("Warning: T-squared statistic is invalid. Using alternative approach.")
+            return multivariate_hotelling_test(diff_tensor, alpha)  # Recursive call with univariate approach
+        
         # Convert to F-statistic
         F_stat = (n - p) / (p * (n - 1)) * T_squared
+        
+        # Check if F-statistic is valid
+        if not np.isfinite(F_stat) or F_stat < 0:
+            print("Warning: F-statistic is invalid. Using alternative approach.")
+            return multivariate_hotelling_test(diff_tensor, alpha)  # Recursive call with univariate approach
         
         # Degrees of freedom
         df1, df2 = p, n - p
@@ -115,13 +166,15 @@ def multivariate_hotelling_test(diff_tensor, alpha=0.05):
         reject_null = F_stat > critical_value
         
         results = {
+            'test_type': 'hotelling_t_squared',
             'T_squared': T_squared,
             'F_statistic': F_stat,
             'p_value': p_value,
             'critical_value': critical_value,
             'reject_null': reject_null,
             'sample_mean': sample_mean,
-            'sample_cov': sample_cov
+            'sample_cov': sample_cov,
+            'condition_number': condition_number
         }
         
         print(f"\nHotelling's T-squared Test Results:")
@@ -139,8 +192,8 @@ def multivariate_hotelling_test(diff_tensor, alpha=0.05):
         return results
         
     except np.linalg.LinAlgError:
-        print("Error: Covariance matrix is singular. Cannot perform Hotelling's test.")
-        return None
+        print("Error: Covariance matrix is singular. Using alternative approach.")
+        return multivariate_hotelling_test(diff_tensor, alpha)  # Recursive call with univariate approach
 
 
 def main():
@@ -183,9 +236,20 @@ def main():
     upper_x = embed_in(upper_ids)
     diff = upper_x - lower_x
     
+    # Print debugging information
+    print(f"\nEmbedding analysis:")
+    print(f"Number of paired tokens: {len(paired_tokens)}")
+    print(f"Embedding dimension: {lower_x.shape[1]}")
+    print(f"Lower embeddings shape: {lower_x.shape}")
+    print(f"Upper embeddings shape: {upper_x.shape}")
+    print(f"Difference embeddings shape: {diff.shape}")
+    print(f"Mean difference magnitude: {diff.abs().mean():.6f}")
+    print(f"Std difference magnitude: {diff.abs().std():.6f}")
+    print(f"Max difference magnitude: {diff.abs().max():.6f}")
+    
     # Perform hypothesis testing if requested
     if args.test:
-        print("Performing multivariate hypothesis test on diff tensor...")
+        print("\nPerforming multivariate hypothesis test on diff tensor...")
         test_results = multivariate_hotelling_test(diff, alpha=0.05)
     
     # Save mean differences to cache file
