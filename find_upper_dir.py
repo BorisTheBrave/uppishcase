@@ -1,57 +1,48 @@
-# %%
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
-import torch as t
-import re
+#!/usr/bin/env python3
+"""
+Script to analyze case differences in token embeddings and perform hypothesis testing.
+"""
+
+import argparse
 import os
-
-# %%
-from common import get_embed_layer
-# %%
-model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-
-tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name)
-embed_in = get_embed_layer(model)
-
-#%%
-
-# Loop through all tokens in the vocabulary
-alphanum_tokens = []
-for token_id in range(len(tokenizer)):
-    token = tokenizer.convert_ids_to_tokens(token_id)
-    if re.match(r"^[a-zA-Z0-9 ]+$", token):
-        alphanum_tokens.append(token)
-
-paired_tokens = []
-lowercase_tokens = set(map(lambda x: x.lower(), alphanum_tokens))
-for token_lower in lowercase_tokens:
-    token_upper = token_lower.upper()
-    token_lower_id = tokenizer.convert_tokens_to_ids(token_lower)
-    token_upper_id = tokenizer.convert_tokens_to_ids(token_upper)
-    if (token_lower_id != tokenizer.unk_token_id and 
-        token_upper_id != tokenizer.unk_token_id and
-        token_lower_id != token_upper_id):
-        paired_tokens.append((token_lower, token_lower_id, token_upper, token_upper_id))
-
-print(f"Found {len(paired_tokens)} paired tokens")
-# %%
-
-lower_ids = t.tensor([token_lower_id for token_lower, token_lower_id, token_upper, token_upper_id in paired_tokens])
-upper_ids = t.tensor([token_upper_id for token_lower, token_lower_id, token_upper, token_upper_id in paired_tokens])
-
-lower_x = embed_in(lower_ids)
-upper_x = embed_in(upper_ids)
-diff = upper_x - lower_x
-
-# %%
-
-from sklearn.manifold import TSNE
-import matplotlib.pyplot as plt
+import re
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers.tokenization_utils import PreTrainedTokenizer
+import torch as t
 import numpy as np
 from scipy import stats
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+
+from common import get_embed_layer, DEFAULT_MODEL
+
+
+def find_case_paired_tokens(tokenizer):
+    """Find tokens that have both lowercase and uppercase versions."""
+    # Loop through all tokens in the vocabulary
+    alphanum_tokens = []
+    for token_id in range(len(tokenizer)):
+        token = tokenizer.convert_ids_to_tokens(token_id)
+        if re.match(r"^[a-zA-Z0-9 ]+$", token):
+            alphanum_tokens.append(token)
+
+    paired_tokens = []
+    lowercase_tokens = set(map(lambda x: x.lower(), alphanum_tokens))
+    for token_lower in lowercase_tokens:
+        token_upper = token_lower.upper()
+        token_lower_id = tokenizer.convert_tokens_to_ids(token_lower)
+        token_upper_id = tokenizer.convert_tokens_to_ids(token_upper)
+        if (token_lower_id != tokenizer.unk_token_id and 
+            token_upper_id != tokenizer.unk_token_id and
+            token_lower_id != token_upper_id):
+            paired_tokens.append((token_lower, token_lower_id, token_upper, token_upper_id))
+
+    print(f"Found {len(paired_tokens)} paired tokens")
+    return paired_tokens
+
 
 def plot_tsne(lower_x, upper_x):
-
+    """Create t-SNE visualization of case-paired token embeddings."""
     # Combine embeddings and create labels
     all_embeddings = t.cat([lower_x, upper_x], dim=0).detach().numpy()
     labels = ['lowercase'] * len(lower_x) + ['uppercase'] * len(upper_x)
@@ -72,10 +63,6 @@ def plot_tsne(lower_x, upper_x):
     plt.legend()
     plt.show()
 
-# plot_tsne(lower_x, upper_x)
-
-
-# %%
 
 def multivariate_hotelling_test(diff_tensor, alpha=0.05):
     """
@@ -155,20 +142,63 @@ def multivariate_hotelling_test(diff_tensor, alpha=0.05):
         print("Error: Covariance matrix is singular. Cannot perform Hotelling's test.")
         return None
 
-# Perform the hypothesis test
-# print("Performing multivariate hypothesis test on diff tensor...")
-# test_results = multivariate_hotelling_test(diff, alpha=0.05)
 
-# %%
+def main():
+    parser = argparse.ArgumentParser(
+        description="Analyze case differences in token embeddings and perform hypothesis testing"
+    )
+    parser.add_argument(
+        "--model", 
+        type=str, 
+        default=DEFAULT_MODEL,
+        help=f"Model name to analyze (default: {DEFAULT_MODEL})"
+    )
+    parser.add_argument(
+        "--test", 
+        action="store_true",
+        help="Perform hypothesis testing on the case differences"
+    )
+    
+    args = parser.parse_args()
+    
+    print(f"Loading model: {args.model}")
+    
+    # Load tokenizer and model
+    tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(args.model)
+    model = AutoModelForCausalLM.from_pretrained(args.model)
+    embed_in = get_embed_layer(model)
+    
+    # Find case-paired tokens
+    paired_tokens = find_case_paired_tokens(tokenizer)
+    
+    if not paired_tokens:
+        print("No case-paired tokens found. Exiting.")
+        return
+    
+    # Extract embeddings for paired tokens
+    lower_ids = t.tensor([token_lower_id for token_lower, token_lower_id, token_upper, token_upper_id in paired_tokens])
+    upper_ids = t.tensor([token_upper_id for token_lower, token_lower_id, token_upper, token_upper_id in paired_tokens])
 
-# Save mean differences to cache file
-cache_path = f"cache/upper_dir_{model_name.replace('/', '_')}.pt"
+    lower_x = embed_in(lower_ids)
+    upper_x = embed_in(upper_ids)
+    diff = upper_x - lower_x
+    
+    # Perform hypothesis testing if requested
+    if args.test:
+        print("Performing multivariate hypothesis test on diff tensor...")
+        test_results = multivariate_hotelling_test(diff, alpha=0.05)
+    
+    # Save mean differences to cache file
+    cache_path = f"cache/upper_dir_{args.model.replace('/', '_')}.pt"
+    
+    # Create cache directory if it doesn't exist
+    os.makedirs("cache", exist_ok=True)
+    
+    # Calculate and save mean differences
+    mean_diff = diff.mean(dim=0)
+    t.save(mean_diff, cache_path)
+    print(f"Saved mean differences to: {cache_path}")
 
-# Create cache directory if it doesn't exist
-os.makedirs("cache", exist_ok=True)
 
-# Calculate and save mean differences
-mean_diff = diff.mean(dim=0)
-t.save(mean_diff, cache_path)
-
-# %%
+if __name__ == "__main__":
+    main()
