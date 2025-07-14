@@ -20,6 +20,7 @@ tokenizer.convert_ids_to_tokens(tokenizer.encode(" IS THE CORRECT ANSWER"))
 
 I think there are sitll some directions this could go, but am time boxing:
 * we might still get good value simply out of only using the tokens MUST, SHOULD, etc
-* we could find a direciton in a later layer that actually corresponds to something being suddenly allcaps (instead of just being part of an all caps sentence)
-* Find another model with a less crazy
+* we could find a direction in a later layer that actually corresponds to something being suddenly allcaps (as opposed to just being part of an all caps sentence)
+* Test why " IS THE correct answer" isn't sufficient hinting.
+* Find another model with a less crazy tokenization
 * Isn't it strange that there isn't a generalized uppercase dimension. It seems such an obvious thing to learn. How else could it be encoded?
