@@ -8,10 +8,10 @@ import torch as t
 import re
 import os
 
-from common import get_embed_layer
+from common import get_embed_layer, DEFAULT_MODEL
 # %%
 
-model_name = "Qwen/Qwen2-7B-Instruct"
+model_name = DEFAULT_MODEL
 device = "cuda" if t.cuda.is_available() else "cpu"
 PER_TOK = False
 # %%
