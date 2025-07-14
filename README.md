@@ -24,3 +24,4 @@ I think there are sitll some directions this could go, but am time boxing:
 * Test why " IS THE correct answer" isn't sufficient hinting.
 * Find another model with a less crazy tokenization
 * Isn't it strange that there isn't a generalized uppercase dimension. It seems such an obvious thing to learn. How else could it be encoded?
+* Suggestion from Ed: Use "." -> "!" as the salience map instead. Probably simpler all round.
