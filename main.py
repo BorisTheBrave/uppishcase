@@ -2,21 +2,29 @@
 import bisect
 from functools import partial
 from typing import Literal
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers.tokenization_utils import PreTrainedTokenizer
 import torch as t
 import re
 import os
 
 from common import get_embed_layer
 # %%
+
 model_name = "Qwen/Qwen2-7B-Instruct"
 device = "cuda" if t.cuda.is_available() else "cpu"
+PER_TOK = False
+# %%
 
 tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
 
-# Load mean differences from cache
-cache_path = f"cache/upper_dir_{model_name.replace('/', '_')}.pt"
+# %%
+# Load directions from cache
+if PER_TOK:
+    cache_path = f"cache/upper_dir_per_tok_{model_name.replace('/', '_')}.pt"
+else:
+    cache_path = f"cache/upper_dir_{model_name.replace('/', '_')}.pt"
 upper_dir = t.load(cache_path).to(device)
 
 # %%
@@ -123,7 +131,14 @@ def generate_text(text: str, transform: Transform = "none", steering_scale: floa
         if is_first:
             assert input[0].shape == inputs.shape
             is_first = False
-            output += steering.unsqueeze(-1) * upper_dir * steering_scale
+            if PER_TOK:
+                # upper_dir has shape (vocab_size, embedding_dim)
+                # Index it with the input token IDs
+                token_dirs = upper_dir[inputs]
+                output += steering.unsqueeze(-1) * token_dirs * steering_scale
+            else:
+                # upper_dir has shape (embedding_dim,)
+                output += steering.unsqueeze(-1) * upper_dir * steering_scale
         return output
     
     handle = get_embed_layer(model).register_forward_hook(hook)
@@ -159,7 +174,14 @@ def generate_logits(text: str, transform: Transform = "none", steering_scale: fl
         if is_first:
             assert input[0].shape == inputs.shape
             is_first = False
-            output += steering.unsqueeze(-1) * upper_dir * steering_scale
+            if PER_TOK:
+                # upper_dir has shape (vocab_size, embedding_dim)
+                # Index it with the input token IDs
+                token_dirs = upper_dir[inputs]
+                output += steering.unsqueeze(-1) * token_dirs * steering_scale
+            else:
+                # upper_dir has shape (embedding_dim,)
+                output += steering.unsqueeze(-1) * upper_dir * steering_scale
         return output
     
     handle = get_embed_layer(model).register_forward_hook(hook)
@@ -199,9 +221,6 @@ print(generated_logits)
 # %%
 
 messages = [
-    [{"role": "user", "content": "*What is the meaning of life? Respond in text with this casing style*"}],
-]
-messages = [
     [{"role": "user", "content": """Please choose one of A or B, abiding by the following rules to the best of your ability.
 A *is the correct answer*.
 B is the correct answer.
@@ -226,7 +245,7 @@ for message_list in messages:
     assert isinstance(formatted, str)
     logits = generate_logits(
         formatted,
-        steering_scale=0.0,
+        steering_scale=-1.0,
         transform="uppish"
     )
     a_pref = logits[0, -1, a_token_id] - logits[0, -1, b_token_id]

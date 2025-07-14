@@ -20,14 +20,13 @@ from common import get_embed_layer, DEFAULT_MODEL
 def find_case_paired_tokens(tokenizer):
     """Find tokens that have both lowercase and uppercase versions."""
     # Loop through all tokens in the vocabulary
-    alphanum_tokens = []
+    lowercase_tokens = set()
     for token_id in range(len(tokenizer)):
         token = tokenizer.convert_ids_to_tokens(token_id)
-        if re.match(r"^[a-zA-Z0-9 ]+$", token):
-            alphanum_tokens.append(token)
+        if re.match(r"^[Ġa-z0-9 ]+$", token):
+            lowercase_tokens.add(token)
 
     paired_tokens = []
-    lowercase_tokens = set(map(lambda x: x.lower(), alphanum_tokens))
     for token_lower in lowercase_tokens:
         token_upper = token_lower.upper()
         token_lower_id = tokenizer.convert_tokens_to_ids(token_lower)
@@ -37,7 +36,6 @@ def find_case_paired_tokens(tokenizer):
             token_lower_id != token_upper_id):
             paired_tokens.append((token_lower, token_lower_id, token_upper, token_upper_id))
 
-    print(f"Found {len(paired_tokens)} paired tokens")
     return paired_tokens
 
 
@@ -223,6 +221,12 @@ def main():
     
     # Find case-paired tokens
     paired_tokens = find_case_paired_tokens(tokenizer)
+
+    # for token_lower, token_lower_id, token_upper, token_upper_id in paired_tokens:
+    #     print(token_lower, token_lower_id, token_upper, token_upper_id)
+
+    print(f"Found {len(paired_tokens)} paired tokens")
+
     
     if not paired_tokens:
         print("No case-paired tokens found. Exiting.")
