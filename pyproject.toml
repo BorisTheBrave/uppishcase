@@ -16,4 +16,6 @@ dependencies = [
     "scipy>=1.11.0",
     "ipywidgets>=8.1.7",
     "protobuf>=6.31.1",
+    "transformer-lens>=2.16.1",
+    "datasets>=4.0.0",
 ]
