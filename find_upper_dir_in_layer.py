@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """
 Script to load a HuggingFace dataset and model, then loop over the dataset 
-to record average token activations.
+to record average token activations using TransformerLens.
 """
 
 # %%
 import argparse
 import os
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from transformers.tokenization_utils import PreTrainedTokenizer
+from transformer_lens import HookedTransformer
 import torch as t
 from datasets import load_dataset
 import numpy as np
 from tqdm import tqdm
 
-from common import DEFAULT_MODEL, get_layer
+from common import DEFAULT_MODEL
 
 # %%
 def extract_text_from_batch(dataset, start_idx, end_idx):
@@ -52,17 +51,17 @@ def extract_text_from_batch(dataset, start_idx, end_idx):
     return batch_texts
 
 # %%
-def process_batch(tokenizer, model, batch_texts: list[str], layer_num: int):
+def process_batch(model, batch_texts: list[str], layer_num: int):
     """
     Process a batch of texts by selecting random words, truncating, and capitalizing.
     
     Args:
-        tokenizer: Model tokenizer
-        model: Model (not used in current implementation)
+        model: TransformerLens HookedTransformer model
         batch_texts: List of text strings to process
+        layer_num: Layer number to analyze
         
     Returns:
-        list of processed text strings
+        Tensor of activation differences between uppercase and normal versions
     """
     import random
     
@@ -89,62 +88,46 @@ def process_batch(tokenizer, model, batch_texts: list[str], layer_num: int):
         capitalized_text = " ".join(capitalized_words[:random_word_idx + 1])
         final_batch.append(capitalized_text)
 
-    
+    if not final_batch:
+        return t.empty(0, model.cfg.d_model)
 
-    encoded = tokenizer(
-        batch_texts, 
-        return_tensors="pt", 
-        padding=True, 
-        truncation=True, 
-        # max_length=512
-    )
-
-    device = model.device
+    # Tokenize the batch
+    tokens = model.to_tokens(final_batch, prepend_bos=True)
     
-    input_ids = encoded.input_ids.to(device)
-    attention_mask = encoded.attention_mask.to(device)
-
-
-
+    # Run the model to get activations at the specified layer
+    _, cache = model.run_with_cache(tokens)
     
-    device = model.device
-    target_layer = get_layer(model, layer_num)
-    layer_activations = []
+    # Get activations from the specified layer
+    layer_key = f"blocks.{layer_num}.hook_resid_post"
+    layer_activations = cache[layer_key]  # Shape: [batch_size, seq_len, d_model]
     
-    def activation_hook(module, input, output):
-        if isinstance(output, tuple):
-            output = output[0]
-        layer_activations.append(output.detach().cpu())
+    # Find the last non-padding token for each sequence
+    last_nonzero = (tokens != model.tokenizer.pad_token_id).sum(dim=1) - 1
     
-    hook_handle = target_layer.register_forward_hook(activation_hook)
-    
-    try:
-        _ = model(input_ids=input_ids, attention_mask=attention_mask)
-    finally:
-        hook_handle.remove()
-
-    last_nonzero = (attention_mask != 0).max(dim=1).indices
-    last_nonzero = t.maximum(last_nonzero[::2], last_nonzero[1::2])
+    # For pairs, use the maximum sequence length between normal and uppercase versions
+    last_nonzero = t.minimum(last_nonzero[::2], last_nonzero[1::2])
 
     activations = []
-    for i in range(len(final_batch)):
-        upper_act = layer_activations[i*2][last_nonzero[i]]
-        normal_act = layer_activations[i*2+1][last_nonzero[i]]
+    for i in range(len(final_batch) // 2):
+        normal_act = layer_activations[i*2, last_nonzero[i]]  # Normal version
+        upper_act = layer_activations[i*2+1, last_nonzero[i]]  # Uppercase version
         activations.append(upper_act - normal_act)
 
-    activations = t.stack(activations)
+    if activations:
+        activations = t.stack(activations)
+    else:
+        activations = t.empty(0, model.cfg.d_model)
     
     return activations
 
 # %%
-def process_dataset_activations(dataset, tokenizer, model, layer_num=3, max_samples=None, batch_size=8):
+def process_dataset_activations(dataset, model, layer_num=3, max_samples=None, batch_size=8):
     """
     Process dataset samples and compute average token activations.
     
     Args:
         dataset: HuggingFace dataset
-        tokenizer: Model tokenizer
-        model: Model for computing activations
+        model: TransformerLens HookedTransformer model
         layer_num: Layer number to analyze
         max_samples: Maximum number of samples to process (None for all)
         batch_size: Batch size for processing
@@ -152,112 +135,69 @@ def process_dataset_activations(dataset, tokenizer, model, layer_num=3, max_samp
     Returns:
         dict with activation statistics
     """
-    device = model.device
-    target_layer = get_layer(model, layer_num)
     
     total_activation = 0.0
-    total_tokens = 0
+    total_samples = 0
     activation_sums = None
     num_batches = 0
-    layer_activations = []
-    
-    # Set up hook to capture layer activations
-    def activation_hook(module, input, output):
-        layer_activations.append(output.detach().cpu())
-    
-    hook_handle = target_layer.register_forward_hook(activation_hook)
     
     # Determine number of samples to process
     num_samples = len(dataset) if max_samples is None else min(max_samples, len(dataset))
     
     print(f"Processing {num_samples} samples from dataset using layer {layer_num}...")
     
-    model.eval()
-    try:
-        with t.no_grad():
-            for i in tqdm(range(0, num_samples, batch_size), desc="Processing batches"):
-                batch_end = min(i + batch_size, num_samples)
-                
-                # Extract text from batch using the dedicated function
-                batch_texts = extract_text_from_batch(dataset, i, batch_end)
+    with t.no_grad():
+        for i in tqdm(range(0, num_samples, batch_size), desc="Processing batches"):
+            batch_end = min(i + batch_size, num_samples)
+            
+            # Extract text from batch using the dedicated function
+            batch_texts = extract_text_from_batch(dataset, i, batch_end)
 
-                x = process_batch(tokenizer, model, batch_texts, layer_num)
+            try:
+                # Process batch to get activation differences
+                activation_diffs = process_batch(model, batch_texts, layer_num)
                 
-                # Tokenize batch
-                try:
-                    encoded = tokenizer(
-                        batch_texts, 
-                        return_tensors="pt", 
-                        padding=True, 
-                        truncation=True, 
-                        max_length=512
-                    )
+                if activation_diffs.numel() > 0:
+                    # Compute activation statistics
+                    batch_activation = activation_diffs.sum().item()
+                    batch_samples = activation_diffs.shape[0]
                     
-                    input_ids = encoded.input_ids.to(device)
-                    attention_mask = encoded.attention_mask.to(device)
+                    total_activation += batch_activation
+                    total_samples += batch_samples
                     
-                    # Clear previous activations
-                    layer_activations.clear()
+                    # Accumulate activation sums for computing mean direction
+                    batch_activation_sum = activation_diffs.sum(dim=0)  # Sum over batch
                     
-                    # Forward pass to trigger hook
-                    _ = model(input_ids=input_ids, attention_mask=attention_mask)
+                    if activation_sums is None:
+                        activation_sums = batch_activation_sum
+                    else:
+                        activation_sums += batch_activation_sum
                     
-                    # Get the captured activations
-                    if layer_activations:
-                        activations = layer_activations[0].to(device)
-                        
-                        # Apply attention mask to exclude padding tokens
-                        masked_activations = activations * attention_mask.unsqueeze(-1)
-                        
-                        # Compute activation statistics
-                        batch_activation = masked_activations.sum().item()
-                        batch_tokens = attention_mask.sum().item()
-                        
-                        total_activation += batch_activation
-                        total_tokens += batch_tokens
-                        
-                        # Accumulate activation sums for computing mean direction
-                        batch_activation_sum = masked_activations.sum(dim=(0, 1))  # Sum over batch and sequence
-                        
-                        if activation_sums is None:
-                            activation_sums = batch_activation_sum
-                        else:
-                            activation_sums += batch_activation_sum
-                        
-                        num_batches += 1
-                    
-                except Exception as e:
-                    print(f"Error processing batch {i//batch_size}: {e}")
-                    continue
-    finally:
-        # Always remove the hook
-        hook_handle.remove()
+                    num_batches += 1
+                
+            except Exception as e:
+                print(f"Error processing batch {i//batch_size}: {e}")
+                continue
     
-    if total_tokens == 0:
-        print("Warning: No tokens processed successfully")
-        # Try to get embedding dimension from model
-        try:
-            from common import get_embed_layer
-            embed_layer = get_embed_layer(model)
-            embedding_dim = embed_layer.embedding_dim
-        except:
-            embedding_dim = 768  # fallback default
+    if total_samples == 0:
+        print("Warning: No samples processed successfully")
+        embedding_dim = model.cfg.d_model
         
         return {
             'average_activation': 0.0,
-            'total_tokens': 0,
+            'total_samples': 0,
             'mean_embedding': t.zeros(embedding_dim),
             'num_batches': num_batches,
             'embedding_dim': embedding_dim
         }
     
     # Compute final statistics
-    average_activation = total_activation / total_tokens
-    mean_embedding = activation_sums / total_tokens
+    average_activation = total_activation / total_samples
+    mean_embedding = activation_sums / total_samples
     
     results = {
         'average_activation': average_activation,
-        'total_tokens': total_tokens,
+        'total_samples': total_samples,
         'mean_embedding': mean_embedding,
         'num_batches': num_batches,
         'embedding_dim': mean_embedding.shape[0]
@@ -285,7 +225,7 @@ def main():
     parser.add_argument(
         "--dataset_config",
         type=str,
-        default="databricks/databricks-dolly-15k",
+        default="wikitext/wikitext-2-raw-v1",
         help="Dataset configuration (default: databricks/databricks-dolly-15k)"
     )
     parser.add_argument(
@@ -317,14 +257,9 @@ def main():
     
     print(f"Loading model: {args.model}")
     
-    # Load tokenizer and model
-    tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(args.model)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    model = AutoModelForCausalLM.from_pretrained(args.model)
+    # Load model using TransformerLens
     device = "cuda" if t.cuda.is_available() else "cpu"
-    model = model.to(device)
+    model = HookedTransformer.from_pretrained(args.model, device=device)
     
     print(f"Loading dataset: {args.dataset}")
     if args.dataset_config:
@@ -337,7 +272,6 @@ def main():
     # Process dataset and compute activations
     results = process_dataset_activations(
         dataset, 
-        tokenizer, 
         model, 
         layer_num=args.layer,
         max_samples=args.max_samples,
@@ -346,10 +280,10 @@ def main():
     
     # Print results
     print(f"\nActivation Analysis Results (Layer {args.layer}):")
-    print(f"Total tokens processed: {results['total_tokens']:,}")
+    print(f"Total samples processed: {results['total_samples']:,}")
     print(f"Number of batches: {results['num_batches']}")
     print(f"Embedding dimension: {results['embedding_dim']}")
-    print(f"Average token activation: {results['average_activation']:.6f}")
+    print(f"Average sample activation: {results['average_activation']:.6f}")
     print(f"Mean activation magnitude: {results['mean_embedding'].norm().item():.6f}")
     print(f"Mean activation shape: {results['mean_embedding'].shape}")
     
@@ -366,7 +300,7 @@ def main():
     save_data = {
         'average_activation': results['average_activation'],
         'mean_embedding': results['mean_embedding'],
-        'total_tokens': results['total_tokens'],
+        'total_samples': results['total_samples'],
         'embedding_dim': results['embedding_dim'],
         'layer_num': args.layer,
         'model_name': args.model,
@@ -391,7 +325,7 @@ sys.exit()
 
 # %%
 
-from common import get_embed_layer, DEFAULT_MODEL
+from common import DEFAULT_MODEL
 # %%
 
 model_name = DEFAULT_MODEL
@@ -399,8 +333,7 @@ device = "cuda" if t.cuda.is_available() else "cpu"
 PER_TOK = False
 # %%
 
-tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+model = HookedTransformer.from_pretrained(model_name, device=device)
 
 # %%
 
@@ -408,7 +341,7 @@ dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
 batch_texts = extract_text_from_batch(dataset, 0, 1)
 # %%
 
-x = process_batch(tokenizer, model, batch_texts, 3)
+x = process_batch(model, batch_texts, 3)
 # %%
 
 x.shape
