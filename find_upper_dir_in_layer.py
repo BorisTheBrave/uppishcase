@@ -80,12 +80,16 @@ def process_batch(model, batch_texts: list[str], layer_num: int):
         
         # Truncate everything after the random word (inclusive of the word)
         truncated_text = " ".join(words[:random_word_idx + 1])
-        final_batch.append(truncated_text)
-        
+
         # Capitalize the selected word and create second version
         capitalized_words = words.copy()
         capitalized_words[random_word_idx] = words[random_word_idx].upper()
         capitalized_text = " ".join(capitalized_words[:random_word_idx + 1])
+
+        if truncated_text == capitalized_text:
+            continue
+
+        final_batch.append(truncated_text)
         final_batch.append(capitalized_text)
 
     if not final_batch:
@@ -136,7 +140,6 @@ def process_dataset_activations(dataset, model, layer_num=3, max_samples=None, b
         dict with activation statistics
     """
     
-    total_activation = 0.0
     total_samples = 0
     activation_sums = None
     num_batches = 0
@@ -159,10 +162,8 @@ def process_dataset_activations(dataset, model, layer_num=3, max_samples=None, b
                 
                 if activation_diffs.numel() > 0:
                     # Compute activation statistics
-                    batch_activation = activation_diffs.sum().item()
                     batch_samples = activation_diffs.shape[0]
                     
-                    total_activation += batch_activation
                     total_samples += batch_samples
                     
                     # Accumulate activation sums for computing mean direction
@@ -179,26 +180,12 @@ def process_dataset_activations(dataset, model, layer_num=3, max_samples=None, b
                 print(f"Error processing batch {i//batch_size}: {e}")
                 continue
     
-    if total_samples == 0:
-        print("Warning: No samples processed successfully")
-        embedding_dim = model.cfg.d_model
-        
-        return {
-            'average_activation': 0.0,
-            'total_samples': 0,
-            'mean_embedding': t.zeros(embedding_dim),
-            'num_batches': num_batches,
-            'embedding_dim': embedding_dim
-        }
-    
     # Compute final statistics
-    average_activation = total_activation / total_samples
     mean_embedding = activation_sums / total_samples
     
     results = {
-        'average_activation': average_activation,
         'total_samples': total_samples,
-        'mean_embedding': mean_embedding,
+        'dir': mean_embedding,
         'num_batches': num_batches,
         'embedding_dim': mean_embedding.shape[0]
     }
@@ -225,7 +212,7 @@ def main():
     parser.add_argument(
         "--dataset_config",
         type=str,
-        default="wikitext/wikitext-2-raw-v1",
+        default="wikitext-2-raw-v1",
         help="Dataset configuration (default: databricks/databricks-dolly-15k)"
     )
     parser.add_argument(
@@ -283,9 +270,8 @@ def main():
     print(f"Total samples processed: {results['total_samples']:,}")
     print(f"Number of batches: {results['num_batches']}")
     print(f"Embedding dimension: {results['embedding_dim']}")
-    print(f"Average sample activation: {results['average_activation']:.6f}")
-    print(f"Mean activation magnitude: {results['mean_embedding'].norm().item():.6f}")
-    print(f"Mean activation shape: {results['mean_embedding'].shape}")
+    print(f"Mean activation magnitude: {results['dir'].norm().item():.6f}")
+    print(f"Mean activation shape: {results['dir'].shape}")
     
     # Save results to cache
     cache_dir = "cache"
@@ -298,11 +284,9 @@ def main():
     
     # Save comprehensive results
     save_data = {
-        'average_activation': results['average_activation'],
-        'mean_embedding': results['mean_embedding'],
+        'dir': results['dir'],
         'total_samples': results['total_samples'],
-        'embedding_dim': results['embedding_dim'],
-        'layer_num': args.layer,
+        'layer': args.layer,
         'model_name': args.model,
         'dataset_name': args.dataset,
         'dataset_config': args.dataset_config,
@@ -313,9 +297,9 @@ def main():
     print(f"\nSaved results to: {cache_path}")
 
 
+# %%
 if __name__ == "__main__":
-    pass
-    # main()
+    main()
 
 
 # %%
