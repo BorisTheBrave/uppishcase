@@ -4,6 +4,7 @@ Script to analyze case differences in token embeddings and perform hypothesis te
 """
 
 import argparse
+import dataclasses
 import os
 import re
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -14,7 +15,7 @@ from scipy import stats
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 
-from common import get_embed_layer, DEFAULT_MODEL
+from common import SteeringVector, get_embed_layer, DEFAULT_MODEL
 
 
 def find_case_paired_tokens(tokenizer):
@@ -270,10 +271,11 @@ def main():
         model_name = args.model,
         hook='embed',
         src = {
+            'description': f"Uppercase direction in embed",
             'paired_tokens_count': len(paired_tokens),
         })
 
-    t.save(dataclasses.asdict(save_data), cache_path)
+    save_data.save(cache_path)
     print(f"Saved mean differences to: {cache_path}")
 
 

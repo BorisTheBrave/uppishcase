@@ -1,8 +1,8 @@
 # DEFAULT_MODEL = "Qwen/Qwen2-7B-Instruct"
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Literal, Optional
 from torch import Tensor
-
+import torch as t
 
 DEFAULT_MODEL = "google/gemma-2-2b-it"
 DEFAULT_LAYER = 3
@@ -71,10 +71,20 @@ def get_layer_tl(model, layer_num):
 
 @dataclass
 class SteeringVector:
+    # shape (hidden_dim,)
+    # or (vocab_size, hidden_dim) if per_tok is True
     dir: Tensor
     model_name: str
     hook: Literal['embed', 'resid_post'] = "resid_post"
     layer: Optional[int] = None
     per_tok: bool = False
     src: object = None
+
+    def save(self, path):
+        t.save({field.name: getattr(self, field.name) for field in fields(self)}, path)
+
+    @classmethod
+    def load(cls, path):
+        data = t.load(path)
+        return cls(**data)
 

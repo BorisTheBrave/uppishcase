@@ -118,19 +118,15 @@ def generate_text(text: str,
     steering = steering.to(device)
 
     is_first = True
-    def hook(resid_post, hook):
+    def hook(value, hook):
         nonlocal is_first
         if is_first:
             is_first = False
             if sv.per_tok:
-                # upper_dir has shape (vocab_size, embedding_dim)
-                # Index it with the input token IDs
-                token_dirs = sv.dir[inputs]
-                resid_post += steering.unsqueeze(-1) * token_dirs * steering_scale
+                value += steering.unsqueeze(-1) * sv.dir[inputs] * steering_scale
             else:
-                # upper_dir has shape (embedding_dim,)
-                resid_post = resid_post + steering.unsqueeze(-1) * sv.dir * steering_scale
-        return resid_post
+                value += steering.unsqueeze(-1) * sv.dir * steering_scale
+        return value
     
     # Use TransformerLens hook system
     act_layer = get_act_name(sv.hook, sv.layer)
@@ -166,19 +162,18 @@ def generate_logits(text: str,
     steering = steering.to(device)
 
     is_first = True
-    def hook(resid_post, hook):
+    def hook(value, hook):
         nonlocal is_first
         if is_first:
             is_first = False
             if sv.per_tok:
                 # upper_dir has shape (vocab_size, embedding_dim)
                 # Index it with the input token IDs
-                token_dirs = sv.dir[inputs]
-                resid_post += steering.unsqueeze(-1) * token_dirs * steering_scale
+                value += steering.unsqueeze(-1) * sv.dir[inputs] * steering_scale
             else:
                 # upper_dir has shape (embedding_dim,)
-                resid_post += steering.unsqueeze(-1) * sv.dir * steering_scale
-        return resid_post
+                value += steering.unsqueeze(-1) * sv.dir * steering_scale
+        return value
     
     # Use TransformerLens hook system   
     act_layer = get_act_name(sv.hook, sv.layer)
@@ -192,22 +187,7 @@ def generate_logits(text: str,
 
     return outputs  # Return logits from the cache
     
-def evaluate_preference(
-    model: HookedTransformer,
-    sv: SteeringVector,
-    steering_scale: float = -1.0,
-    transform: str = "uppish"):
-    """
-    Evaluate preference between A and B options using steering.
-    
-    Args:
-        steering_scale: Scale factor for steering direction
-        transform: Transform type to apply
-        
-    Returns:
-        List of preference scores (A preference minus B preference)
-    """
-    messages = [
+messages = [
         [{"role": "user", "content": """Please choose one of A or B, abiding by the following rules to the best of your ability.
 A *is the correct answer*.
 B is the correct answer.
@@ -223,6 +203,40 @@ Respond in the following format:
 ANSWER: <answer>
 """}, {"role": "assistant", "content": "ANSWER:"}],
     ]
+
+messages = [
+        [{"role": "user", "content": """Please choose the most salient of A or B, abiding by the following rules to the best of your ability.
+A *is the correct answer*.
+B is the correct answer.
+
+Respond in the following format:
+ANSWER: <answer>
+"""}, {"role": "assistant", "content": "ANSWER:"}],
+        [{"role": "user", "content": """Please choose the most salient of A or B, abiding by the following rules to the best of your ability.
+A is the correct answer.
+B *is the correct answer*.
+
+Respond in the following format:
+ANSWER: <answer>
+"""}, {"role": "assistant", "content": "ANSWER:"}],
+    ]
+
+def evaluate_preference(
+    model: HookedTransformer,
+    sv: SteeringVector,
+    steering_scale: float = -1.0,
+    transform: str = "uppish"):
+    """
+    Evaluate preference between A and B options using steering.
+    
+    Args:
+        steering_scale: Scale factor for steering direction
+        transform: Transform type to apply
+        
+    Returns:
+        List of preference scores (A preference minus B preference)
+    """
+    
 
     a_token_id = model.tokenizer.encode(" A", add_special_tokens=False)[0]
     b_token_id = model.tokenizer.encode(" B", add_special_tokens=False)[0]

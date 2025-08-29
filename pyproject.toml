@@ -18,4 +18,5 @@ dependencies = [
     "protobuf>=6.31.1",
     "transformer-lens>=2.16.1",
     "datasets>=4.0.0",
+    "natsort>=8.4.0",
 ]

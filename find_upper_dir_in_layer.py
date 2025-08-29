@@ -80,17 +80,19 @@ def process_batch(model, batch_texts: list[str], layer_num: int):
         random_word_idx = random.randint(0, len(words) - 1)
         
         # Truncate everything after the random word (inclusive of the word)
-        truncated_text = " ".join(words[:random_word_idx + 1])
+        lower_words = words.copy()
+        lower_words[random_word_idx] = words[random_word_idx].lower()
+        lower_text = " ".join(lower_words[:random_word_idx + 1])
 
         # Capitalize the selected word and create second version
         capitalized_words = words.copy()
         capitalized_words[random_word_idx] = words[random_word_idx].upper()
         capitalized_text = " ".join(capitalized_words[:random_word_idx + 1])
 
-        if truncated_text == capitalized_text:
+        if lower_text == capitalized_text:
             continue
 
-        final_batch.append(truncated_text)
+        final_batch.append(lower_text)
         final_batch.append(capitalized_text)
 
     if not final_batch:
@@ -114,9 +116,9 @@ def process_batch(model, batch_texts: list[str], layer_num: int):
 
     activations = []
     for i in range(len(final_batch) // 2):
-        normal_act = layer_activations[i*2, last_nonzero[i]]  # Normal version
+        lower_act = layer_activations[i*2, last_nonzero[i]]  # Normal version
         upper_act = layer_activations[i*2+1, last_nonzero[i]]  # Uppercase version
-        activations.append(upper_act - normal_act)
+        activations.append(upper_act - lower_act)
 
     if activations:
         activations = t.stack(activations)
@@ -162,10 +164,7 @@ def process_dataset_activations(dataset, model, layer_num=3, max_samples=None, b
                 activation_diffs = process_batch(model, batch_texts, layer_num)
                 
                 if activation_diffs.numel() > 0:
-                    # Compute activation statistics
-                    batch_samples = activation_diffs.shape[0]
-                    
-                    total_samples += batch_samples
+                    total_samples += activation_diffs.shape[0]
                     
                     # Accumulate activation sums for computing mean direction
                     batch_activation_sum = activation_diffs.sum(dim=0)  # Sum over batch
@@ -289,13 +288,14 @@ def main():
         layer=args.layer,
         model_name = args.model,
         src = {
+            'description': f"Uppercase direction in layer {args.layer}",
             'total_samples': results['total_samples'],
             'dataset_name': args.dataset,
             'dataset_config': args.dataset_config,
             'max_samples': args.max_samples
         })
     
-    t.save( dataclasses.asdict(save_data), cache_path)
+    save_data.save(cache_path)
     print(f"\nSaved results to: {cache_path}")
 
 

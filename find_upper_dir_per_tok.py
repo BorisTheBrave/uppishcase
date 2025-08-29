@@ -109,7 +109,7 @@ def main():
     
     # Save full vocabulary directions to cache file
     cache_path = f"cache/upper_dir_per_tok_{args.model.replace('/', '_')}.pt"
-    t.save(dataclasses.asdict(save_data), cache_path)
+    save_data.save(cache_path)
     print(f"Saved full vocabulary directions to: {cache_path}")
 
 
