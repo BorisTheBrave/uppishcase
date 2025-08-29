@@ -8,6 +8,8 @@ import torch as t
 import re
 import os
 from transformer_lens.utils import get_act_name
+
+from common import SteeringVector
 # %%
 # All transforms return a tuple of (tokens, mask, steering)
 
@@ -100,9 +102,7 @@ transforms = {
 
 def generate_text(text: str,
     model: HookedTransformer,
-    layer: int,
-    upper_dir: t.Tensor,
-    per_tok: bool = False,
+    sv: SteeringVector,
     transform: Transform = "none",
     steering_scale: float = 1.0,
     **kwargs
@@ -122,18 +122,18 @@ def generate_text(text: str,
         nonlocal is_first
         if is_first:
             is_first = False
-            if per_tok:
+            if sv.per_tok:
                 # upper_dir has shape (vocab_size, embedding_dim)
                 # Index it with the input token IDs
-                token_dirs = upper_dir[inputs]
+                token_dirs = sv.dir[inputs]
                 resid_post += steering.unsqueeze(-1) * token_dirs * steering_scale
             else:
                 # upper_dir has shape (embedding_dim,)
-                resid_post = resid_post + steering.unsqueeze(-1) * upper_dir * steering_scale
+                resid_post = resid_post + steering.unsqueeze(-1) * sv.dir * steering_scale
         return resid_post
     
     # Use TransformerLens hook system
-    act_layer = get_act_name("resid_post", layer)
+    act_layer = get_act_name(sv.hook, sv.layer)
     # act_layer = "hook_embed"
 
     inputs[mask == 0] = model.tokenizer.pad_token_id
@@ -151,9 +151,7 @@ def generate_text(text: str,
 
 def generate_logits(text: str,
     model: HookedTransformer,
-    layer: int,
-    upper_dir: t.Tensor,
-    per_tok: bool = False,
+    sv: SteeringVector,
     transform: Transform = "none",
     steering_scale: float = 1.0):
 
@@ -172,18 +170,18 @@ def generate_logits(text: str,
         nonlocal is_first
         if is_first:
             is_first = False
-            if per_tok:
+            if sv.per_tok:
                 # upper_dir has shape (vocab_size, embedding_dim)
                 # Index it with the input token IDs
-                token_dirs = upper_dir[inputs]
+                token_dirs = sv.dir[inputs]
                 resid_post += steering.unsqueeze(-1) * token_dirs * steering_scale
             else:
                 # upper_dir has shape (embedding_dim,)
-                resid_post += steering.unsqueeze(-1) * upper_dir * steering_scale
+                resid_post += steering.unsqueeze(-1) * sv.dir * steering_scale
         return resid_post
     
     # Use TransformerLens hook system   
-    act_layer = get_act_name("resid_post", layer)
+    act_layer = get_act_name(sv.hook, sv.layer)
     # act_layer = "hook_embed"
 
     inputs[mask == 0] = model.tokenizer.pad_token_id
@@ -196,9 +194,7 @@ def generate_logits(text: str,
     
 def evaluate_preference(
     model: HookedTransformer,
-    layer: int,
-    upper_dir: t.Tensor,
-    per_tok: bool = False,
+    sv: SteeringVector,
     steering_scale: float = -1.0,
     transform: str = "uppish"):
     """
@@ -238,9 +234,7 @@ ANSWER: <answer>
         logits = generate_logits(
             formatted,
             model=model,
-            layer=layer,
-            upper_dir=upper_dir,
-            per_tok=per_tok,
+            sv=sv,
             steering_scale=steering_scale,
             transform=transform
         )

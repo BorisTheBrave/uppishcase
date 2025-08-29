@@ -6,6 +6,7 @@ to record average token activations using TransformerLens.
 
 # %%
 import argparse
+import dataclasses
 import os
 from transformer_lens import HookedTransformer
 import torch as t
@@ -13,7 +14,7 @@ from datasets import load_dataset
 import numpy as np
 from tqdm import tqdm
 
-from common import DEFAULT_MODEL
+from common import DEFAULT_MODEL, SteeringVector
 
 # %%
 def extract_text_from_batch(dataset, start_idx, end_idx):
@@ -283,17 +284,18 @@ def main():
     cache_path = f"{cache_dir}/layer{args.layer}_activations_{model_name_safe}_{dataset_name_safe}.pt"
     
     # Save comprehensive results
-    save_data = {
-        'dir': results['dir'],
-        'total_samples': results['total_samples'],
-        'layer': args.layer,
-        'model_name': args.model,
-        'dataset_name': args.dataset,
-        'dataset_config': args.dataset_config,
-        'max_samples': args.max_samples
-    }
+    save_data = SteeringVector(
+        dir=results['dir'],
+        layer=args.layer,
+        model_name = args.model,
+        src = {
+            'total_samples': results['total_samples'],
+            'dataset_name': args.dataset,
+            'dataset_config': args.dataset_config,
+            'max_samples': args.max_samples
+        })
     
-    t.save(save_data, cache_path)
+    t.save( dataclasses.asdict(save_data), cache_path)
     print(f"\nSaved results to: {cache_path}")
 
 

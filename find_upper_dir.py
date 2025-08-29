@@ -264,7 +264,16 @@ def main():
     
     # Calculate and save mean differences
     mean_diff = diff.mean(dim=0)
-    t.save(mean_diff, cache_path)
+
+    save_data = SteeringVector(
+        dir=mean_diff,
+        model_name = args.model,
+        hook='embed',
+        src = {
+            'paired_tokens_count': len(paired_tokens),
+        })
+
+    t.save(dataclasses.asdict(save_data), cache_path)
     print(f"Saved mean differences to: {cache_path}")
 
 

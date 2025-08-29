@@ -1,4 +1,9 @@
 # DEFAULT_MODEL = "Qwen/Qwen2-7B-Instruct"
+from dataclasses import dataclass
+from typing import Literal, Optional
+from torch import Tensor
+
+
 DEFAULT_MODEL = "google/gemma-2-2b-it"
 DEFAULT_LAYER = 3
 
@@ -63,3 +68,13 @@ def get_layer_tl(model, layer_num):
         raise ValueError(f"Layer {layer_num} does not exist. Model has {model.cfg.n_layers} layers.")
     
     return model.blocks[layer_num]
+
+@dataclass
+class SteeringVector:
+    dir: Tensor
+    model_name: str
+    hook: Literal['embed', 'resid_post'] = "resid_post"
+    layer: Optional[int] = None
+    per_tok: bool = False
+    src: object = None
+

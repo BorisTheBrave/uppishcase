@@ -4,6 +4,7 @@ Script to analyze case differences in token embeddings and record per-token dire
 """
 
 import argparse
+import dataclasses
 import os
 import re
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -11,7 +12,7 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 import torch as t
 import numpy as np
 
-from common import get_embed_layer, DEFAULT_MODEL
+from common import SteeringVector, get_embed_layer, DEFAULT_MODEL
 
 
 def find_case_paired_tokens(tokenizer):
@@ -96,10 +97,19 @@ def main():
     
     # Create cache directory if it doesn't exist
     os.makedirs("cache", exist_ok=True)
+
+    save_data = SteeringVector(
+        dir=full_dir,
+        model_name = args.model,
+        hook='embed',
+        per_tok=True,
+        src = {
+            'paired_tokens_count': len(paired_tokens),
+        })
     
     # Save full vocabulary directions to cache file
     cache_path = f"cache/upper_dir_per_tok_{args.model.replace('/', '_')}.pt"
-    t.save(full_dir, cache_path)
+    t.save(dataclasses.asdict(save_data), cache_path)
     print(f"Saved full vocabulary directions to: {cache_path}")
 
 
